@@ -509,7 +509,7 @@ class Applicant(models.Model):
             'res_model': 'ir.attachment',
             'name': _('Documents'),
             'context': {
-                'default_res_model': 'hr.job',
+                'default_res_model': 'hr.applicant',
                 'default_res_id': self.ids[0],
                 'show_partner_name': 1,
             },
@@ -592,9 +592,9 @@ class Applicant(models.Model):
                 applicant._message_add_suggested_recipient(recipients, partner=applicant.partner_id.sudo(), reason=_('Contact'))
             elif applicant.email_from:
                 email_from = tools.email_normalize(applicant.email_from)
-                if applicant.partner_name:
+                if email_from and applicant.partner_name:
                     email_from = tools.formataddr((applicant.partner_name, email_from))
-                applicant._message_add_suggested_recipient(recipients, email=email_from, reason=_('Contact Email'))
+                    applicant._message_add_suggested_recipient(recipients, email=email_from, reason=_('Contact Email'))
         return recipients
 
     def name_get(self):

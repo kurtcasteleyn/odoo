@@ -205,13 +205,14 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
             let syncOrderResult, hasError;
 
             try {
+                this.env.services.ui.block()
                 // 1. Save order to server.
                 syncOrderResult = await this.env.pos.push_single_order(this.currentOrder);
 
                 // 2. Invoice.
                 if (this.shouldDownloadInvoice() && this.currentOrder.is_to_invoice()) {
                     if (syncOrderResult.length) {
-                        await this.env.legacyActionManager.do_action('account.account_invoices', {
+                        await this.env.legacyActionManager.do_action(this.env.pos.invoiceReportAction, {
                             additional_context: {
                                 active_ids: [syncOrderResult[0].account_move],
                             },
@@ -235,6 +236,8 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
                     }
                 }
             } catch (error) {
+                // unblock the UI before showing the error popup
+                this.env.services.ui.unblock();
                 if (error.code == 700 || error.code == 701)
                     this.error = true;
 
@@ -256,6 +259,7 @@ odoo.define('point_of_sale.PaymentScreen', function (require) {
                     }
                 }
             } finally {
+                this.env.services.ui.unblock()
                 // Always show the next screen regardless of error since pos has to
                 // continue working even offline.
                 this.showScreen(this.nextScreen);

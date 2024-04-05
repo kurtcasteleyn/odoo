@@ -292,6 +292,19 @@ class Meeting(models.Model):
             if event.allday:
                 event.stop -= timedelta(seconds=1)
 
+    @api.onchange('start_date', 'stop_date')
+    def _onchange_date(self):
+        """ This onchange is required for cases where the stop/start is False and we set an allday event.
+            The inverse method is not called in this case because start_date/stop_date are not used in any
+            compute/related, so we need an onchange to set the start/stop values in the form view
+        """
+        for event in self:
+            if event.stop_date and event.start_date:
+                event.with_context(is_calendar_event_new=True).write({
+                    'start': fields.Datetime.from_string(event.start_date).replace(hour=8),
+                    'stop': fields.Datetime.from_string(event.stop_date).replace(hour=18),
+                })
+
     def _inverse_dates(self):
         """ This method is used to set the start and stop values of all day events.
             The calendar view needs date_start and date_stop values to display correctly the allday events across
@@ -590,7 +603,7 @@ class Meeting(models.Model):
         # that has just been removed, as it might have changed their next event notification
         if not self.env.context.get('dont_notify') and update_alarms:
             self._setup_alarms()
-        attendee_update_events = self.filtered(lambda ev: ev.user_id != self.env.user)
+        attendee_update_events = self.filtered(lambda ev: ev.user_id and ev.user_id != self.env.user)
         if update_time and attendee_update_events:
             # Another user update the event time fields. It should not be auto accepted for the organizer.
             # This prevent weird behavior when a user modified future events time fields and
@@ -688,14 +701,19 @@ class Meeting(models.Model):
 
         removed_partner_ids = []
         added_partner_ids = []
+
+        # if commands are just integers, assume they are ids with the intent to `Command.set`
+        if partner_commands and isinstance(partner_commands[0], int):
+            partner_commands = [Command.set(partner_commands)]
+
         for command in partner_commands:
             op = command[0]
-            if op in (2, 3):  # Remove partner
+            if op in (2, 3, Command.delete, Command.unlink):  # Remove partner
                 removed_partner_ids += [command[1]]
-            elif op == 6:  # Replace all
+            elif op in (6, Command.set):  # Replace all
                 removed_partner_ids += set(self.partner_ids.ids) - set(command[2])  # Don't recreate attendee if partner already attend the event
                 added_partner_ids += set(command[2]) - set(self.partner_ids.ids)
-            elif op == 4:
+            elif op in (4, Command.link):
                 added_partner_ids += [command[1]] if command[1] not in self.partner_ids.ids else []
             # commands 0 and 1 not supported
 

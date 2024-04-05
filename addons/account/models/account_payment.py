@@ -191,12 +191,12 @@ class AccountPayment(models.Model):
 
     def _get_valid_liquidity_accounts(self):
         return (
-            self.journal_id.default_account_id,
-            self.payment_method_line_id.payment_account_id,
-            self.journal_id.company_id.account_journal_payment_debit_account_id,
-            self.journal_id.company_id.account_journal_payment_credit_account_id,
-            self.journal_id.inbound_payment_method_line_ids.payment_account_id,
-            self.journal_id.outbound_payment_method_line_ids.payment_account_id,
+            self.journal_id.default_account_id |
+            self.payment_method_line_id.payment_account_id |
+            self.journal_id.company_id.account_journal_payment_debit_account_id |
+            self.journal_id.company_id.account_journal_payment_credit_account_id |
+            self.journal_id.inbound_payment_method_line_ids.payment_account_id |
+            self.journal_id.outbound_payment_method_line_ids.payment_account_id
         )
 
     def _get_aml_default_display_map(self):
@@ -667,6 +667,8 @@ class AccountPayment(models.Model):
         for pay in self:
             if not pay.payment_method_line_id:
                 raise ValidationError(_("Please define a payment method line on your payment."))
+            elif pay.payment_method_line_id.journal_id and pay.payment_method_line_id.journal_id != pay.journal_id:
+                raise ValidationError(_("The selected payment method is not available for this payment, please select the payment method again."))
 
     # -------------------------------------------------------------------------
     # LOW-LEVEL METHODS
@@ -674,7 +676,7 @@ class AccountPayment(models.Model):
 
     def new(self, values=None, origin=None, ref=None):
         payment = super(AccountPayment, self.with_context(is_payment=True)).new(values, origin, ref)
-        if not payment.journal_id and not payment.default_get(['journal_id']):  # might not be computed because declared by inheritance
+        if not any(values.values()) and not payment.journal_id and not payment.default_get(['journal_id']):  # might not be computed because declared by inheritance
             payment.move_id._compute_journal_id()
         return payment
 

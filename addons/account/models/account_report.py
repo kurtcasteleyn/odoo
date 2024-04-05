@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import ast
 import re
 from collections import defaultdict
 
@@ -472,6 +473,16 @@ class AccountReportExpression(models.Model):
              " in case the carryover destination requires more complex logic."
     )
 
+    @api.constrains('formula')
+    def _check_domain_formula(self):
+        for expression in self.filtered(lambda expr: expr.engine == 'domain'):
+            try:
+                domain = ast.literal_eval(expression.formula)
+                self.env['account.move.line']._where_calc(domain)
+            except:
+                raise UserError(_("Invalid domain for expression '%s' of line '%s': %s",
+                                expression.label, expression.report_line_name, expression.formula))
+
     @api.depends('engine')
     def _compute_auditable(self):
         auditable_engines = self._get_auditable_engines()
@@ -587,10 +598,11 @@ class AccountReportExpression(models.Model):
         to_expand = self.filtered(lambda x: x.engine == 'aggregation')
         while to_expand:
             domains = []
+            sub_expressions = self.env['account.report.expression']
 
             for candidate_expr in to_expand:
                 if candidate_expr.formula == 'sum_children':
-                    result |= candidate_expr.report_line_id.children_ids.expression_ids.filtered(lambda e: e.label == candidate_expr.label)
+                    sub_expressions |= candidate_expr.report_line_id.children_ids.expression_ids.filtered(lambda e: e.label == candidate_expr.label)
                 else:
                     labels_by_code = candidate_expr._get_aggregation_terms_details()
 
@@ -603,9 +615,10 @@ class AccountReportExpression(models.Model):
                         domains.append(dependency_domain)
 
             if domains:
-                sub_expressions = self.env['account.report.expression'].search(osv.expression.OR(domains))
-                to_expand = sub_expressions.filtered(lambda x: x.engine == 'aggregation' and x not in result)
-                result |= sub_expressions
+                sub_expressions |= self.env['account.report.expression'].search(osv.expression.OR(domains))
+
+            to_expand = sub_expressions.filtered(lambda x: x.engine == 'aggregation' and x not in result)
+            result |= sub_expressions
 
         return result
 
@@ -738,7 +751,7 @@ class AccountReportExternalValue(models.Model):
     value = fields.Float(required=True)
     date = fields.Date(required=True)
 
-    target_report_expression_id = fields.Many2one(string="Target Expression", comodel_name="account.report.expression", required=True)
+    target_report_expression_id = fields.Many2one(string="Target Expression", comodel_name="account.report.expression", required=True, ondelete="cascade")
     target_report_line_id = fields.Many2one(string="Target Line", related="target_report_expression_id.report_line_id")
     target_report_expression_label = fields.Char(string="Target Expression Label", related="target_report_expression_id.label")
     report_country_id = fields.Many2one(string="Country", related='target_report_line_id.report_id.country_id')

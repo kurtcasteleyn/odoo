@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import logging
 from odoo import Command
+
 from odoo.api import Environment
 from odoo.tools import DEFAULT_SERVER_DATE_FORMAT
+from odoo.tests import loaded_demo_data, tagged
 from odoo.addons.account.tests.common import AccountTestInvoicingHttpCommon
 from datetime import date, timedelta
 
-import odoo.tests
+_logger = logging.getLogger(__name__)
 
 
 class TestPointOfSaleHttpCommon(AccountTestInvoicingHttpCommon):
@@ -66,13 +69,19 @@ class TestPointOfSaleHttpCommon(AccountTestInvoicingHttpCommon):
         (all_pos_product - discount - cls.tip)._write({'active': False})
 
         # In DESKS categ: Desk Pad
-        pos_categ_desks = env.ref('point_of_sale.pos_category_desks')
+        pos_categ_desks = env.ref('point_of_sale.pos_category_desks', raise_if_not_found=False)
+        if not pos_categ_desks:
+            pos_categ_desks = cls.env['pos.category'].create({'name': 'Desk'})
 
         # In DESKS categ: Whiteboard Pen
-        pos_categ_misc = env.ref('point_of_sale.pos_category_miscellaneous')
+        pos_categ_misc = env.ref('point_of_sale.pos_category_miscellaneous', raise_if_not_found=False)
+        if not pos_categ_misc:
+            pos_categ_misc = cls.env['pos.category'].create({'name': 'Misc'})
 
         # In CHAIR categ: Letter Tray
-        pos_categ_chairs = env.ref('point_of_sale.pos_category_chairs')
+        pos_categ_chairs = env.ref('point_of_sale.pos_category_chairs', raise_if_not_found=False)
+        if not pos_categ_chairs:
+            pos_categ_chairs = cls.env['pos.category'].create({'name': 'Chairs'})
 
         # test an extra price on an attribute
         cls.whiteboard_pen = env['product.product'].create({
@@ -477,9 +486,12 @@ class TestPointOfSaleHttpCommon(AccountTestInvoicingHttpCommon):
         env['ir.property']._set_default("property_product_pricelist", "res.partner", public_pricelist, main_company)
 
 
-@odoo.tests.tagged('post_install', '-at_install')
+@tagged('post_install', '-at_install')
 class TestUi(TestPointOfSaleHttpCommon):
     def test_01_pos_basic_order(self):
+        if not loaded_demo_data(self.env):
+            _logger.warning("This test relies on demo data. To be rewritten independently of demo data for accurate and reliable results.")
+            return
 
         self.main_pos_config.write({
             'iface_tipproduct': True,
@@ -509,6 +521,9 @@ class TestUi(TestPointOfSaleHttpCommon):
         self.assertEqual(email_count, 1)
 
     def test_02_pos_with_invoiced(self):
+        if not loaded_demo_data(self.env):
+            _logger.warning("This test relies on demo data. To be rewritten independently of demo data for accurate and reliable results.")
+            return
         self.main_pos_config.open_ui()
         self.start_tour("/pos/ui?config_id=%d" % self.main_pos_config.id, 'ChromeTour', login="accountman")
         n_invoiced = self.env['pos.order'].search_count([('state', '=', 'invoiced')])
@@ -522,6 +537,9 @@ class TestUi(TestPointOfSaleHttpCommon):
         self.start_tour("/pos/ui?config_id=%d" % self.main_pos_config, 'ProductConfiguratorTour', login="accountman")
 
     def test_05_ticket_screen(self):
+        if not loaded_demo_data(self.env):
+            _logger.warning("This test relies on demo data. To be rewritten independently of demo data for accurate and reliable results.")
+            return
         self.main_pos_config.open_ui()
         self.start_tour("/pos/ui?config_id=%d" % self.main_pos_config.id, 'TicketScreenTour', login="accountman")
 
@@ -673,6 +691,7 @@ class TestUi(TestPointOfSaleHttpCommon):
         self.start_tour("/pos/ui?config_id=%d" % self.main_pos_config.id, 'PaymentScreenRoundingHalfUp', login="accountman")
 
     def test_rounding_half_up_cash_and_bank(self):
+        self.env['res.partner'].create({'name': 'Nicole Ford'})
         company = self.main_pos_config.company_id
         rouding_method = self.env['account.cash.rounding'].create({
             'name': 'Rounding HALF-UP',
@@ -1025,3 +1044,49 @@ class TestUi(TestPointOfSaleHttpCommon):
 
         self.main_pos_config.open_ui()
         self.start_tour("/pos/ui?debug=1&config_id=%d" % self.main_pos_config.id, 'limitedProductPricelistLoading', login="accountman")
+
+    def test_receipt_tracking_method(self):
+        self.product_a = self.env['product.product'].create({
+            'name': 'Product A',
+            'type': 'product',
+            'tracking': 'lot',
+            'categ_id': self.env.ref('product.product_category_all').id,
+            'available_in_pos': True,
+        })
+        self.main_pos_config.open_ui()
+        self.start_tour("/pos/ui?config_id=%d" % self.main_pos_config.id, 'ReceiptTrackingMethodTour', login="accountman")
+
+    def test_rounding_down_refund_multiple_payment(self):
+        """This test makes sure that the refund amount always correspond to what has been paid in the original order.
+           In this example we have a rounding, so we pay 55 in bank that is not rounded, then we pay the rest in cash
+           that is rounded. This sum up to 130 paid, so the refund should be 130."""
+        rouding_method = self.env['account.cash.rounding'].create({
+            'name': 'Rounding down',
+            'rounding': 5.0,
+            'rounding_method': 'DOWN',
+        })
+
+        self.env['product.product'].create({
+            'name': 'Product Test',
+            'available_in_pos': True,
+            'list_price': 134.38,
+            'taxes_id': False,
+        })
+
+        self.main_pos_config.write({
+            'rounding_method': rouding_method.id,
+            'cash_rounding': True,
+        })
+
+        self.main_pos_config.open_ui()
+        self.start_tour("/pos/ui?config_id=%d" % self.main_pos_config.id, 'PaymentScreenRoundingDownMultiplePayment', login="accountman")
+
+        last_order = self.env['pos.order'].search([], order='id desc', limit=1)
+        refund_order = self.env['pos.order'].browse(last_order.refund()['res_id'])
+        payment = self.env['pos.make.payment'].with_context(active_id=refund_order.id).create({
+            'payment_method_id': self.main_pos_config.payment_method_ids[0].id,
+        })
+        self.assertEqual(payment.amount, -130.0, "The amount should be 130.0")
+        payment.check()
+        self.assertEqual(refund_order.amount_paid, -130.0, "The amount should be 130.0")
+        self.assertEqual(refund_order.state, 'paid', "The order should be paid")
